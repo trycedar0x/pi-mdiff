@@ -1,145 +1,196 @@
 # pi-mdiff
 
-Markdown-aware edit tools for [pi coding agent](https://github.com/earendil-works/pi-coding-agent).
+**Markdown-aware editing for pi coding agent. Fixes `edit` failures on `.md` files caused by line-wrap mismatches, and adds section-anchored editing so reformatting can never break your workflow.**
 
-Fixes the core problem: **standard `SEARCH/REPLACE` blocks break on markdown prose** because
-formatters like [flowmark](https://github.com/jlevy/flowmark) and prettier soft-wrap paragraphs at
-different line widths.
-The same paragraph content that the LLM read as one long line might live across 4 physical lines on
-disk — causing `edit` to fail even when the content is correct.
+[![npm version](https://img.shields.io/npm/v/pi-mdiff?style=flat-square)](https://www.npmjs.com/package/pi-mdiff)
+[![license](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](https://opensource.org/licenses/MIT)
+[![pi-package](https://img.shields.io/badge/pi-package-8b5cf6?style=flat-square)](https://pi.dev/packages/pi-mdiff)
 
-## What it does
+## The problem
 
-**1. Normalizes `edit` SEARCH blocks on `.md` files** (transparent, no LLM change required)
+You ask pi to update a paragraph in your docs. It fails:
 
-Intercepts `edit` tool calls on markdown files and normalizes the SEARCH block before matching:
-joins soft-wrapped lines within paragraphs, collapses extra blank lines, normalizes list bullets.
+```
+Error: cannot find matching context in docs/architecture.md
+<<<<<<< SEARCH
+The system uses PostgreSQL for all storage.
+The schema is defined in schema.sql.
+All queries go through the repository layer.
+```
 
-The normalizer is structure-aware — it never touches fenced code blocks, YAML frontmatter, table
-rows, blockquotes, headings, or list items. Only prose paragraphs are joined.
+The file has the same content — just wrapped differently by a formatter. Pi read it as three lines, the file now has them joined into one. Exact text match fails.
 
-If the built-in `edit` still fails after normalization, `pi-mdiff` reads the file itself, applies a
-fuzzy normalized match, and transparently recovers — returning a success result instead of surfacing
-the error to the LLM.
+**pi-mdiff fixes this silently.** The edit goes through without any retry, without any error, without the LLM ever knowing there was a problem.
 
-**2. Adds `md_inspect` — show section/block structure**
+## Install
+
+```bash
+pi install npm:pi-mdiff
+```
+
+That is the only step. No config, no API keys.
+
+## Try this first
+
+After installing, ask pi naturally:
+
+```text
+Update the Architecture section of docs/README.md to mention that we moved to PostgreSQL.
+```
+
+```text
+Inspect docs/CONTRIBUTING.md and rewrite the Getting Started section.
+```
+
+```text
+Delete the "Legacy Notes" section from docs/api.md.
+```
+
+```text
+Add a new "Troubleshooting" paragraph after the Installation section in README.md.
+```
+
+pi will use `md_inspect` to find the right section and `md_edit` to apply the change — no fragile text matching involved.
+
+## What this adds
+
+### Transparent fix for `edit` on `.md` files
+
+Every `edit` tool call on a markdown file is intercepted. The SEARCH block is normalized before matching — soft-wrapped lines are joined, extra blank lines collapsed, list bullets standardized.
+
+**Before pi-mdiff:** formatter wraps paragraph differently → SEARCH fails → LLM retries → confusion.
+
+**After pi-mdiff:** normalization runs silently → match found → edit applied → done.
+
+If normalization still can't find a match, pi-mdiff applies its own fuzzy recovery and returns a success result. The LLM never sees the failure.
+
+### `md_inspect` — see section structure before editing
 
 ```
 md_inspect path="docs/architecture.md"
 ```
 
-Returns a structured map of every heading and the blocks inside it (with 0-based indices), so the
-LLM knows what to pass to `md_edit`.
+```
+## Overview
+  [0] paragraph: "This project is a web application that helps…"
+## Database Layer
+  [0] paragraph: "We use PostgreSQL for all persistent storage…"
+  [1] paragraph: "Migrations are managed via Alembic…"
+## API Layer
+  [0] paragraph: "The REST API is built with Express…"
+```
 
-**3. Adds `md_edit` — section-anchored editing**
+Shows every section heading and the blocks inside it, with 0-based indices. Call this before `md_edit` so you know exactly what to target.
+
+### `md_edit` — section-anchored editing
 
 ```
 md_edit path="docs/architecture.md"
         operation="replace"
         section="## Database Layer"
-        block_index=1
-        content="We use PostgreSQL for all persistent storage..."
+        block_index=0
+        content="We use PostgreSQL for all persistent storage.
+The schema is defined in schema.sql and managed via Alembic."
 ```
 
-Anchors to a section heading + block index instead of exact text. Line-reflowing formatters cannot
-break this. Supports `replace`, `insert_after`, and `delete`.
+Anchors to a heading + block index. No text matching. Formatters can reflow the entire file — this still works.
 
-**4. Injects system prompt guidance**
+| Operation | What it does |
+|---|---|
+| `replace` | Replace the block at `block_index` with new content |
+| `insert_after` | Insert a new block after `block_index` |
+| `delete` | Remove the block at `block_index` |
 
-Tells the LLM to prefer `md_edit` for prose paragraphs and `edit` for code blocks inside markdown.
+## Common workflows
 
-## Install
+| Task | How to ask |
+|---|---|
+| Update a specific section | "Rewrite the Deployment section of docs/README.md to mention Docker." |
+| Add a new paragraph | "Add a Troubleshooting section after Installation in README.md." |
+| Delete stale content | "Remove the 'Legacy API' section from docs/api.md." |
+| Bulk doc update | "Update all references to 'SQLite' to 'PostgreSQL' in docs/architecture.md." |
+| Inspect before editing | "Show me the structure of CONTRIBUTING.md before we edit it." |
 
-```bash
-# Project-local (recommended — auto-installs for all agents on the project)
-pi install -l git:github.com/trycedar0x/pi-mdiff
+## What the normalizer preserves
 
-# Global
-pi install git:github.com/trycedar0x/pi-mdiff
+The normalizer only joins soft-wrapped prose lines. Everything else is left exactly as-is:
 
-# Test without installing
-pi -e ./src/index.ts
-```
+| Element | Example | Touched? |
+|---|---|---|
+| Fenced code blocks | ` ``` `…` ``` ` | Never |
+| YAML frontmatter | `---\ntitle: …\n---` | Never |
+| Table rows | `\| Col A \| Col B \|` | Never |
+| Headings | `## Section Name` | Never |
+| List items | `- item`, `  - nested` | Never |
+| Blockquotes | `> quoted text` | Never |
+| Horizontal rules | `---`, `***` | Never |
+| Explicit line breaks | line ending with `  ` | Never |
+| Inline code | `` `code` `` | Never |
+
+## Tools
+
+### `md_inspect`
+
+| Parameter | Description |
+|---|---|
+| `path` | Path to the markdown file |
+
+Returns a formatted section map with block type and preview text for each block. Use this before `md_edit` to find the right `section` and `block_index`.
+
+### `md_edit`
+
+| Parameter | Description |
+|---|---|
+| `path` | Path to the markdown file |
+| `operation` | `replace`, `insert_after`, or `delete` |
+| `section` | Heading text to anchor to — case-insensitive, `##` prefix optional |
+| `block_index` | 0-based index of the target block within the section |
+| `content` | New block content (required for `replace` and `insert_after`) |
 
 ## How it works
 
-### The normalization problem
+**Normalization path** (fixes existing `edit` calls transparently):
 
 ```
-# Same paragraph, two valid line-wrapping styles — both render identically:
-
-## Flowmark (semantic line breaks)      ## Prettier (80-char wrap)
-The system uses PostgreSQL              The system uses PostgreSQL for all
-for all persistent storage.             persistent storage. The schema is
-The schema is defined in                defined in `schema.sql`.
-`schema.sql`.
+LLM calls edit() on .md file
+  → pi-mdiff intercepts tool_call
+  → normalizes SEARCH block: join soft-wrapped lines, collapse blank lines
+  → built-in edit runs with normalized text
+  → if still fails: pi-mdiff applies fuzzy findInMarkdown(), writes file, returns success
 ```
 
-If the LLM read the flowmark version and emits a SEARCH block with the 80-char-wrapped text,
-`edit` fails with "cannot find matching context."
-
-`pi-mdiff` normalizes both sides — the SEARCH block and the file — before comparing, so formatting
-differences are invisible to the matching logic.
-
-### What the normalizer preserves (never joined)
-
-| Element | Example |
-|---|---|
-| Fenced code blocks | ` ``` ` … ` ``` ` |
-| YAML frontmatter | `---\ntitle: …\n---` |
-| Table rows | `\| Col A \| Col B \|` |
-| Headings | `## Section Name` |
-| List items (any indent) | `- item`, `  - nested` |
-| Blockquotes | `> quoted text` |
-| Horizontal rules | `---`, `***` |
-| Explicit line breaks | line ending with two spaces |
-| HTML blocks | `<!-- comment -->`, `<div>` |
-
-### The block-anchor approach
-
-For larger rewrites, even normalized matching can fail if the LLM changes sentence structure.
-`md_edit` skips text matching entirely:
-
-1. Parse the file into an mdast AST
-2. Walk to the section matching the heading (case-insensitive, ignores leading `#`)
-3. Replace / insert after / delete the nth block node
-4. Splice back into the source at exact character offsets
-
-No text matching = no fragility from reformatting.
-
-## File structure
+**Block-anchor path** (md_edit, most robust):
 
 ```
-src/
-  index.ts      Extension entry — hooks, tool registrations, system prompt injection
-  normalize.ts  Prose normalization (splitSegments, normalizeProse, findInMarkdown)
-  ast.ts        AST operations (replaceBlock, insertBlockAfter, deleteBlock, describeSections)
-  test.ts       36 unit tests
-  eval.ts       64 scenario evals across 5 categories (see below)
+LLM calls md_edit()
+  → parse file into mdast AST
+  → find section by heading (case-insensitive)
+  → locate nth block node
+  → splice replacement at exact character offsets
+  → write file
 ```
 
 ## Eval coverage
 
-```
-npm run eval
+```bash
+npm run eval   # 64 cases, 100% pass rate
 ```
 
-64 cases, 100% pass rate:
-
-| Category  | Cases | What it covers |
-|-----------|-------|----------------|
-| normalize | 20    | Every element type: tables, frontmatter, fences, lists, blockquotes, headings, setext, unicode, bullet normalization |
-| find      | 10    | Reflow recovery: 2-line/3-line join, reverse reflow, flowmark vs 80-char, multi-paragraph SEARCH, no-match |
-| md_edit   | 15    | replace / insert_after / delete + blast-radius + frontmatter preservation + error cases |
-| reflow    | 9     | Full 3×3 source-format × search-format matrix (all 6 off-diagonal mismatches pass) |
-| edge      | 10    | Empty files, preamble content, duplicate headings, 500-word paragraphs, inline code, links |
+| Category | Cases | Covers |
+|---|---|---|
+| normalize | 20 | Tables, frontmatter, fences, lists, blockquotes, headings, setext, unicode |
+| find | 10 | 2-line/3-line reflow, reverse reflow, flowmark vs 80-char, multi-paragraph, no-match |
+| md_edit | 15 | replace / insert_after / delete, blast-radius, frontmatter, error cases |
+| reflow | 9 | 3×3 format matrix — all 6 off-diagonal mismatches recover correctly |
+| edge | 10 | Empty files, preamble, duplicate headings, long paragraphs, inline code |
 
 ## Development
 
 ```bash
-npm install
+git clone https://github.com/trycedar0x/pi-mdiff
+cd pi-mdiff && npm install
 npm test          # 36 unit tests
 npm run eval      # 64 scenario evals
-npm run typecheck # tsc strict type check
+npm run typecheck # strict TypeScript check
 pi -e ./src/index.ts  # load in pi for manual testing
 ```

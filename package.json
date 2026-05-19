@@ -24,7 +24,8 @@
   "pi": {
     "extensions": [
       "./src/index.ts"
-    ]
+    ],
+    "image": "https://raw.githubusercontent.com/trycedar0x/pi-mdiff/main/banner.png"
   },
   "dependencies": {
     "mdast-util-from-markdown": "^2.0.2",
