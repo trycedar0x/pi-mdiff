@@ -9,65 +9,85 @@
  * Solution: normalize both the SEARCH block and the file content to a canonical form
  * before comparing. The canonical form collapses soft line-breaks inside paragraphs,
  * leaving only structurally meaningful newlines (blank lines, fenced code, headings,
- * list items, etc.) intact.
+ * list items, tables, frontmatter, etc.) intact.
  */
 
 /** Segments of a markdown document, typed so we can normalize only prose. */
 type Segment =
-  | { kind: "fence"; raw: string }   // ```...``` code fences — never touched
-  | { kind: "html"; raw: string }    // <!-- --> or <tag> blocks
-  | { kind: "prose"; raw: string };  // everything else
+  | { kind: "fence"; raw: string }       // ```...``` or ~~~...~~~ — never touched
+  | { kind: "frontmatter"; raw: string } // ---...--- YAML frontmatter — never touched
+  | { kind: "prose"; raw: string };      // everything else
 
 /**
- * Split raw markdown into typed segments so we can apply different normalization
- * to prose vs. fenced code blocks.
+ * Split raw markdown into typed segments so we can apply normalization only to prose.
+ * Order matters: frontmatter must be checked before fences (both use ---).
  */
 export function splitSegments(text: string): Segment[] {
   const segments: Segment[] = [];
-  // Match fenced code blocks (``` or ~~~, with optional lang)
+
+  // YAML frontmatter: only valid at the very start of the file
+  let rest = text;
+  let offset = 0;
+  const fmMatch = text.match(/^---\n[\s\S]*?\n(?:---|\.\.\.)[ \t]*\n/);
+  if (fmMatch) {
+    segments.push({ kind: "frontmatter", raw: fmMatch[0] });
+    offset = fmMatch[0].length;
+    rest = text.slice(offset);
+  }
+
+  // Fenced code blocks (``` or ~~~, with optional lang) within the remaining text
   const fenceRe = /^(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\1[ \t]*$/gm;
   let last = 0;
 
-  for (const match of text.matchAll(fenceRe)) {
+  for (const match of rest.matchAll(fenceRe)) {
     const start = match.index!;
     if (start > last) {
-      segments.push({ kind: "prose", raw: text.slice(last, start) });
+      segments.push({ kind: "prose", raw: rest.slice(last, start) });
     }
     segments.push({ kind: "fence", raw: match[0] });
     last = start + match[0].length;
   }
 
-  if (last < text.length) {
-    segments.push({ kind: "prose", raw: text.slice(last) });
+  if (last < rest.length) {
+    segments.push({ kind: "prose", raw: rest.slice(last) });
   }
 
   return segments;
 }
 
 /**
- * Returns true if a line starts a structural markdown element that should
- * never be joined to an adjacent line.
+ * Returns true if a line must never be joined with the next line.
+ * Covers: headings, list items (including indented), blockquotes, HTML,
+ * horizontal rules, table rows, and fences.
  */
 function isStructuralLine(l: string): boolean {
+  const t = l.trimEnd();
   return (
-    /^#{1,6} /.test(l) ||
-    /^[-*+] /.test(l) ||
-    /^\d+\. /.test(l) ||
-    /^>/.test(l) ||
-    /^</.test(l) ||
-    /^[-*_]{3,}\s*$/.test(l) ||
-    /^(`{3,}|~{3,})/.test(l)
+    t === "" ||
+    /^#{1,6} /.test(t) ||          // ATX headings
+    /^\s*[-*+] /.test(t) ||        // unordered list items (any indent)
+    /^\s*\d+\. /.test(t) ||        // ordered list items (any indent)
+    /^\s*\d+\) /.test(t) ||        // ordered list with ) delimiter
+    /^>/.test(t) ||                 // blockquotes
+    /^</.test(t) ||                 // HTML blocks / inline HTML
+    /^[-*_]{3,}\s*$/.test(t) ||    // horizontal rules
+    /^(`{3,}|~{3,})/.test(t) ||   // fences
+    /^\|/.test(t) ||               // table rows and separator lines
+    /^={3,}\s*$/.test(t) ||        // setext heading underline (===)
+    /^-{3,}\s*$/.test(t)           // setext heading underline (---) or front matter
   );
 }
 
 /**
  * Normalize a prose segment for fuzzy matching:
  * - Join ALL soft-wrapped lines within a paragraph into a single line.
- *   A "soft wrap" boundary is a \n that is NOT preceded/followed by a blank
- *   line, structural element, or explicit two-space line break.
+ *   A "soft wrap" is a \n that is not followed by a structural element.
  * - Collapse 3+ blank lines → 2
- * - Normalize list bullets (-, *, + → -)
+ * - Normalize list bullets (* and + → -)
  * - Strip trailing whitespace per line
+ *
+ * Structural lines (headings, list items, blockquotes, table rows, etc.)
+ * are always emitted as-is without joining.
  */
 export function normalizeProse(text: string): string {
   const lines = text.split("\n");
@@ -77,30 +97,28 @@ export function normalizeProse(text: string): string {
   while (i < lines.length) {
     const line = lines[i];
     const stripped = line.trimEnd();
+    // Preserve explicit markdown line break (two trailing spaces)
+    const hasExplicitBreak = line.endsWith("  ");
+    const emitted = hasExplicitBreak ? stripped + "  " : stripped;
 
-    // Blank line or structural line — emit as-is, don't try to join forward
-    if (stripped === "" || isStructuralLine(stripped) || line.endsWith("  ")) {
-      out.push(stripped);
+    // Structural or blank line — emit as-is, never join forward
+    if (stripped === "" || isStructuralLine(stripped) || hasExplicitBreak) {
+      out.push(emitted);
       i++;
       continue;
     }
 
-    // Start of a prose run — keep joining subsequent lines until a boundary
+    // Start of a prose run — greedily join subsequent lines until a boundary
     let joined = stripped;
     while (i + 1 < lines.length) {
       const next = lines[i + 1];
       const nextStripped = next.trimEnd();
 
-      // Stop joining at: blank line, structural line, explicit line break
-      if (
-        nextStripped === "" ||
-        isStructuralLine(nextStripped) ||
-        next.endsWith("  ")
-      ) {
+      // Stop at blank line, structural element, or explicit line break
+      if (nextStripped === "" || isStructuralLine(nextStripped) || next.endsWith("  ")) {
         break;
       }
 
-      // Join this next line into the current prose run
       joined += " " + nextStripped.trimStart();
       i++;
     }
@@ -112,12 +130,14 @@ export function normalizeProse(text: string): string {
   // Collapse 3+ blank lines → 2
   const collapsed = out.join("\n").replace(/\n{3,}/g, "\n\n");
 
-  // Normalize list bullets
-  return collapsed.replace(/^[*+] /gm, "- ");
+  // Normalize unordered list bullets (* + → -)
+  // Only at start of line after optional whitespace indent
+  return collapsed.replace(/^(\s*)[*+] /gm, "$1- ");
 }
 
 /**
- * Normalize a full markdown document (prose segments only, fences preserved).
+ * Normalize a full markdown document (prose segments only; fences and
+ * frontmatter are preserved exactly).
  */
 export function normalizeMarkdown(text: string): string {
   const segments = splitSegments(text);
@@ -130,8 +150,7 @@ export function normalizeMarkdown(text: string): string {
  * Try to find `searchText` inside `fileContent` using progressive matching:
  *
  * 1. Exact match (standard behavior)
- * 2. Whitespace-normalized match (trim each line, collapse internal spaces)
- * 3. Full prose normalization (join soft-wrapped lines)
+ * 2. Normalized match (join soft-wrapped lines, collapse blank lines)
  *
  * Returns the matched region as { start, end } byte offsets in `fileContent`,
  * or null if no match found.
@@ -152,8 +171,6 @@ export function findInMarkdown(
 
   const normIdx = normFile.indexOf(normSearch);
   if (normIdx !== -1) {
-    // Map the normalized index back to the original file.
-    // We do this by walking both strings in parallel.
     const origRange = mapNormalizedRangeToOriginal(fileContent, normFile, normIdx, normSearch.length);
     if (origRange) {
       return { ...origRange, normalized: true };
@@ -164,11 +181,11 @@ export function findInMarkdown(
 }
 
 /**
- * Given a range [normStart, normStart+normLen) in normText, map it back to
- * the corresponding range in origText.
+ * Map a range [normStart, normStart+normLen) in normText back to the
+ * corresponding byte range in origText by walking both strings in parallel.
  *
- * We build a position map: normText[i] → origText[j] for each character.
- * This is O(n) but markdown files are small enough that it's fine.
+ * Handles the key case where a soft-wrap \n in origText was collapsed to a
+ * single space in normText.
  */
 function mapNormalizedRangeToOriginal(
   origText: string,
@@ -176,7 +193,6 @@ function mapNormalizedRangeToOriginal(
   normStart: number,
   normLen: number,
 ): { start: number; end: number } | null {
-  // Build map: normPos → origPos
   const normToOrig: number[] = new Array(normText.length + 1).fill(-1);
 
   let o = 0;
@@ -187,29 +203,27 @@ function mapNormalizedRangeToOriginal(
     const nc = normText[n];
 
     if (oc === nc) {
-      // Exact character match
       normToOrig[n] = o;
       o++;
       n++;
     } else if (/\s/.test(oc) && /\s/.test(nc)) {
-      // Both are whitespace (e.g. orig='\n', norm=' ' after soft-wrap collapse)
+      // Both whitespace — correspond (e.g. orig='\n', norm=' ' after soft-wrap)
       normToOrig[n] = o;
       o++;
       n++;
-      // Consume any extra whitespace in orig that was collapsed away in norm
+      // Consume any additional whitespace in orig that was collapsed in norm
       while (o < origText.length && /\s/.test(origText[o]) && !/\s/.test(normText[n] ?? "")) {
         o++;
       }
     } else if (/\s/.test(oc)) {
-      // Extra whitespace in orig not present in norm (e.g. double spaces)
+      // Extra whitespace in orig not present in norm
       o++;
     } else {
-      // Genuine character mismatch — give up on precise mapping
+      // Genuine mismatch — give up
       return null;
     }
   }
 
-  // Mark end
   normToOrig[n] = o;
 
   const origStart = normToOrig[normStart];

@@ -32,6 +32,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "tsx src/test.ts"
+    "test": "tsx src/test.ts",
+    "eval": "tsx src/eval.ts"
   }
 }
