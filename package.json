@@ -1,0 +1,22 @@
+{
+  "name": "pi-mdiff",
+  "version": "0.1.0",
+  "description": "Markdown-aware edit tools for pi coding agent — block-level anchoring, normalized SEARCH matching, and section-based edits for prose files",
+  "license": "MIT",
+  "type": "module",
+  "pi": {
+    "extensions": ["./src/index.ts"]
+  },
+  "dependencies": {
+    "remark": "^15.0.1",
+    "remark-parse": "^11.0.0",
+    "remark-stringify": "^11.0.0",
+    "unified": "^11.0.5",
+    "mdast-util-to-string": "^4.0.0",
+    "mdast-util-from-markdown": "^2.0.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5",
+    "@types/node": "^20.0.0"
+  }
+}
