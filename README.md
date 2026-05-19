@@ -25,7 +25,7 @@ The file has the same content — just wrapped differently by a formatter. Pi re
 ## Install
 
 ```bash
-pi install npm:pi-mdiff
+pi install npm:@trycedar0x/pi-mdiff
 ```
 
 That is the only step. No config, no API keys.
