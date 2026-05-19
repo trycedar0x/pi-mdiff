@@ -45,9 +45,26 @@ export function splitSegments(text: string): Segment[] {
 }
 
 /**
+ * Returns true if a line starts a structural markdown element that should
+ * never be joined to an adjacent line.
+ */
+function isStructuralLine(l: string): boolean {
+  return (
+    /^#{1,6} /.test(l) ||
+    /^[-*+] /.test(l) ||
+    /^\d+\. /.test(l) ||
+    /^>/.test(l) ||
+    /^</.test(l) ||
+    /^[-*_]{3,}\s*$/.test(l) ||
+    /^(`{3,}|~{3,})/.test(l)
+  );
+}
+
+/**
  * Normalize a prose segment for fuzzy matching:
- * - Join soft-wrapped lines within a paragraph (a single \n that is not followed
- *   by a blank line, heading, list marker, blockquote, or horizontal rule)
+ * - Join ALL soft-wrapped lines within a paragraph into a single line.
+ *   A "soft wrap" boundary is a \n that is NOT preceded/followed by a blank
+ *   line, structural element, or explicit two-space line break.
  * - Collapse 3+ blank lines → 2
  * - Normalize list bullets (-, *, + → -)
  * - Strip trailing whitespace per line
@@ -55,56 +72,48 @@ export function splitSegments(text: string): Segment[] {
 export function normalizeProse(text: string): string {
   const lines = text.split("\n");
   const out: string[] = [];
+  let i = 0;
 
-  for (let i = 0; i < lines.length; i++) {
+  while (i < lines.length) {
     const line = lines[i];
     const stripped = line.trimEnd();
-    const next = lines[i + 1];
 
-    out.push(stripped);
-
-    // Decide whether the newline after this line is a "soft wrap" we can collapse.
-    // We keep the newline as-is (don't collapse) if:
-    //  - this line is blank
-    //  - THIS line starts a structural element (heading, list, fence, rule, blockquote)
-    //  - next line is blank (paragraph boundary)
-    //  - next line starts a structural element
-    //  - this line ends with two spaces (explicit line break in markdown)
-    //  - we are at the last line
-    const isStructural = (l: string) =>
-      /^#{1,6} /.test(l) ||
-      /^[-*+] /.test(l) ||
-      /^\d+\. /.test(l) ||
-      /^>/.test(l) ||
-      /^</.test(l) ||
-      /^[-*_]{3,}\s*$/.test(l) ||
-      /^(`{3,}|~{3,})/.test(l);
-
-    if (
-      i === lines.length - 1 ||
-      stripped === "" ||
-      next === undefined ||
-      next.trim() === "" ||
-      isStructural(stripped) ||
-      isStructural(next) ||
-      line.endsWith("  ")
-    ) {
-      // Keep the newline as a real newline in output
-    } else {
-      // Soft wrap — join this line with the next
-      out.pop();
-      out.push(stripped + " " + (lines[i + 1]?.trimStart() ?? ""));
-      i++; // skip next line since we merged it
+    // Blank line or structural line — emit as-is, don't try to join forward
+    if (stripped === "" || isStructuralLine(stripped) || line.endsWith("  ")) {
+      out.push(stripped);
+      i++;
+      continue;
     }
+
+    // Start of a prose run — keep joining subsequent lines until a boundary
+    let joined = stripped;
+    while (i + 1 < lines.length) {
+      const next = lines[i + 1];
+      const nextStripped = next.trimEnd();
+
+      // Stop joining at: blank line, structural line, explicit line break
+      if (
+        nextStripped === "" ||
+        isStructuralLine(nextStripped) ||
+        next.endsWith("  ")
+      ) {
+        break;
+      }
+
+      // Join this next line into the current prose run
+      joined += " " + nextStripped.trimStart();
+      i++;
+    }
+
+    out.push(joined);
+    i++;
   }
 
   // Collapse 3+ blank lines → 2
-  const joined = out.join("\n").replace(/\n{3,}/g, "\n\n");
+  const collapsed = out.join("\n").replace(/\n{3,}/g, "\n\n");
 
   // Normalize list bullets
-  const bulletNorm = joined.replace(/^[*+] /gm, "- ");
-
-  return bulletNorm;
+  return collapsed.replace(/^[*+] /gm, "- ");
 }
 
 /**
