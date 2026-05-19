@@ -153,7 +153,7 @@ Only prose lines are joined. Everything structurally meaningful is left exactly 
 
 | Parameter | Description |
 |---|---|
-| `path` | Path to the markdown file (.md only) |
+| `path` | Path to the markdown file (`.md` or `.markdown`) |
 
 Returns a formatted section map with block type and preview text. Use before `md_edit` to find the right `section` and `block_index`.
 
@@ -161,7 +161,7 @@ Returns a formatted section map with block type and preview text. Use before `md
 
 | Parameter | Description |
 |---|---|
-| `path` | Path to the markdown file (.md only) |
+| `path` | Path to the markdown file (`.md` or `.markdown`) |
 | `operation` | See table above |
 | `section` | Heading text to anchor to — case-insensitive, `##` prefix optional. For `add_section`: the section to insert after (use `(end)` to append at end of file) |
 | `block_index` | 0-based index of the target block (not needed for `append`, `rename_section`, `delete_section`, `add_section`) |
