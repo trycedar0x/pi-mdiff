@@ -19,7 +19,7 @@
  */
 
 import { normalizeMarkdown, findInMarkdown } from "./normalize.js";
-import { replaceBlock, insertBlockAfter, deleteBlock, parseSections, describeSections } from "./ast.js";
+import { replaceBlock, insertBlockAfter, deleteBlock, parseSections, describeSections, appendToSection, renameSection, deleteSection, addSection } from "./ast.js";
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
@@ -417,6 +417,108 @@ test("E15", "md_edit", "describeSections output usable for navigation", () => {
     desc.includes("[0]") &&
     desc.includes("paragraph")
   );
+});
+
+test("E16", "md_edit", "append: block added at end of section", () => {
+  const result = appendToSection(ARCH_DOC, "Database Layer", "Appended block.");
+  const dbIdx = result.indexOf("## Database Layer");
+  const apiIdx = result.indexOf("## API Layer");
+  const appendIdx = result.indexOf("Appended block.");
+  return appendIdx > dbIdx && appendIdx < apiIdx;
+});
+
+test("E17", "md_edit", "append: original blocks preserved", () => {
+  const result = appendToSection(ARCH_DOC, "Database Layer", "Appended block.");
+  return (
+    result.includes("We use SQLite for local development.") &&
+    result.includes("All queries go through the repository layer.")
+  );
+});
+
+test("E18", "md_edit", "append: other sections untouched", () => {
+  const result = appendToSection(ARCH_DOC, "Database Layer", "Appended block.");
+  return (
+    result.includes("## API Layer") &&
+    result.includes("## Frontend") &&
+    result.includes("## Deployment")
+  );
+});
+
+test("E19", "md_edit", "rename_section: heading text changed", () => {
+  const result = renameSection(ARCH_DOC, "Database Layer", "Persistence Layer");
+  return result.includes("## Persistence Layer") && !result.includes("## Database Layer");
+});
+
+test("E20", "md_edit", "rename_section: heading depth preserved", () => {
+  const result = renameSection(ARCH_DOC, "Database Layer", "Persistence Layer");
+  return result.includes("## Persistence Layer") && !result.includes("### Persistence Layer");
+});
+
+test("E21", "md_edit", "rename_section: blocks inside section untouched", () => {
+  const result = renameSection(ARCH_DOC, "Database Layer", "Persistence Layer");
+  return result.includes("We use SQLite for local development.");
+});
+
+test("E22", "md_edit", "rename_section: other sections untouched", () => {
+  const result = renameSection(ARCH_DOC, "Database Layer", "Persistence Layer");
+  return result.includes("## API Layer") && result.includes("## Frontend");
+});
+
+test("E23", "md_edit", "delete_section: heading removed", () => {
+  const result = deleteSection(ARCH_DOC, "Database Layer");
+  return !result.includes("## Database Layer");
+});
+
+test("E24", "md_edit", "delete_section: all blocks in section removed", () => {
+  const result = deleteSection(ARCH_DOC, "Database Layer");
+  return (
+    !result.includes("We use SQLite") &&
+    !result.includes("schema.sql") &&
+    !result.includes("repository layer")
+  );
+});
+
+test("E25", "md_edit", "delete_section: adjacent sections untouched", () => {
+  const result = deleteSection(ARCH_DOC, "Database Layer");
+  return (
+    result.includes("## API Layer") &&
+    result.includes("The REST API is built with Express.") &&
+    result.includes("# System Architecture")
+  );
+});
+
+test("E26", "md_edit", "delete_section: last section can be deleted", () => {
+  const result = deleteSection(ARCH_DOC, "Deployment");
+  return !result.includes("## Deployment") && !result.includes("We deploy to AWS");
+});
+
+test("E27", "md_edit", "add_section: new section inserted between two sections", () => {
+  const result = addSection(ARCH_DOC, "Database Layer", "## Cache Layer\n\nWe use Redis for caching.");
+  const dbIdx = result.indexOf("## Database Layer");
+  const cacheIdx = result.indexOf("## Cache Layer");
+  const apiIdx = result.indexOf("## API Layer");
+  return cacheIdx > dbIdx && cacheIdx < apiIdx;
+});
+
+test("E28", "md_edit", "add_section: new section content present", () => {
+  const result = addSection(ARCH_DOC, "Database Layer", "## Cache Layer\n\nWe use Redis for caching.");
+  return result.includes("## Cache Layer") && result.includes("We use Redis for caching.");
+});
+
+test("E29", "md_edit", "add_section: existing sections untouched", () => {
+  const result = addSection(ARCH_DOC, "Database Layer", "## Cache Layer\n\nWe use Redis.");
+  return (
+    result.includes("We use SQLite for local development.") &&
+    result.includes("## API Layer") &&
+    result.includes("## Frontend")
+  );
+});
+
+test("E30", "md_edit", "add_section: (end) appends after last section", () => {
+  const result = addSection(ARCH_DOC, "(end)", "## Monitoring\n\nWe use Datadog.");
+  const deployIdx = result.indexOf("## Deployment");
+  const monitorIdx = result.indexOf("## Monitoring");
+  return monitorIdx > deployIdx && result.includes("We use Datadog.");
 });
 
 // ── CATEGORY 4: Reflow matrix ─────────────────────────────────────────────
