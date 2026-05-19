@@ -30,7 +30,7 @@ import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 
 import { normalizeMarkdown, findInMarkdown } from "./normalize.js";
-import { replaceBlock, insertBlockAfter, deleteBlock, describeSections } from "./ast.js";
+import { replaceBlock, insertBlockAfter, deleteBlock, describeSections, appendToSection, renameSection, deleteSection, addSection } from "./ast.js";
 
 function isMarkdownPath(path: string | undefined): boolean {
   if (!path) return false;
@@ -140,7 +140,7 @@ export default function (pi: ExtensionAPI) {
     name: "md_inspect",
     label: "Markdown Inspect",
     description:
-      "Show the section and block structure of a markdown file. " +
+      "Show the section and block structure of a markdown file (.md only — not .mdx). " +
       "Returns each heading and the blocks (paragraphs, lists, code, etc.) inside it, " +
       "with their 0-based indices. Use this before md_edit to find the right section and block_index.",
     promptSnippet: "Inspect markdown file structure (sections + block indices for md_edit)",
@@ -152,6 +152,12 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const absolutePath = resolve(ctx.cwd, params.path);
+      if (params.path.endsWith(".mdx")) {
+        return {
+          content: [{ type: "text" as const, text: "md_inspect does not support .mdx files (JSX components cannot be parsed safely). Use the built-in read tool to inspect .mdx file structure instead." }],
+          details: {},
+        };
+      }
       const source = await readFile(absolutePath, "utf-8");
       const description = describeSections(source);
       return {
@@ -169,38 +175,60 @@ export default function (pi: ExtensionAPI) {
     name: "md_edit",
     label: "Markdown Edit",
     description:
-      "Edit a markdown file by section heading and block index. " +
+      "Edit a markdown file (.md only — not .mdx) by section heading and block index. " +
       "More reliable than the built-in edit tool for prose — anchors to a heading and " +
       "block position rather than exact text, so line-reflowing formatters can't break it. " +
       "Use md_inspect first to find the right section and block_index. " +
       "Supported operations: replace (replace a block), insert_after (add a new block " +
-      "after a block), delete (remove a block).",
+      "after a block), delete (remove a block), append (add a block at the end of a section), " +
+      "rename_section (rename the section heading itself), delete_section (remove the entire " +
+      "section including its heading), add_section (insert a brand-new section after another).",
     promptSnippet: "Edit markdown files by section heading + block index (use for .md prose)",
     promptGuidelines: [
-      "Use md_edit instead of edit for prose paragraphs in .md and .mdx files.",
+      "Use md_edit instead of edit for prose paragraphs in .md files (not .mdx).",
       "Always call md_inspect first to get the section heading and block_index for md_edit.",
-      "Use the built-in edit tool for code blocks inside markdown (``` fences).",
+      "Use the built-in edit tool for code blocks inside markdown (``` fences) and for .mdx files.",
+      "Operations that don't target a specific block (append, rename_section, delete_section, add_section) do not require block_index.",
+      "For add_section: set section to the heading to insert after (or '(end)'), and content to the full new section markdown including its heading line.",
     ],
     parameters: Type.Object({
       path: Type.String({ description: "Path to the markdown file" }),
-      operation: StringEnum(["replace", "insert_after", "delete"] as const, {
-        description: "replace: replace block content. insert_after: insert new block after this one. delete: remove block.",
+      operation: StringEnum(["replace", "insert_after", "delete", "append", "rename_section", "delete_section", "add_section"] as const, {
+        description:
+          "replace: replace block content. insert_after: add block after this one. delete: remove block. " +
+          "append: add a block at the end of the section. " +
+          "rename_section: rename the section heading (content = new heading text). " +
+          "delete_section: remove the entire section including its heading. " +
+          "add_section: insert a new section after 'section' (or '(end)'); content = full markdown including heading line.",
       }),
       section: Type.String({
         description:
           'Heading text to anchor to, e.g. "## Architecture" or just "Architecture". ' +
-          "Use (preamble) for content before the first heading.",
+          "Use (preamble) for content before the first heading. " +
+          "For add_section: the section to insert after (use '(end)' to append at end of file).",
       }),
-      block_index: Type.Number({
-        description: "0-based index of the target block within the section (from md_inspect output)",
-      }),
+      block_index: Type.Optional(
+        Type.Number({
+          description: "0-based index of the target block within the section (from md_inspect). Not required for append, rename_section, delete_section, or add_section.",
+        }),
+      ),
       content: Type.Optional(
         Type.String({
-          description: "New block content (required for replace and insert_after, omit for delete)",
+          description:
+            "New block content (required for replace, insert_after, append, and add_section; omit for delete and delete_section). " +
+            "For rename_section: the new heading text (# prefix optional). " +
+            "For add_section: full markdown including the heading line.",
         }),
       ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      if (params.path.endsWith(".mdx")) {
+        return {
+          content: [{ type: "text" as const, text: "md_edit does not support .mdx files (JSX components cannot be parsed safely). Use the built-in edit tool for .mdx files instead." }],
+          details: {},
+        };
+      }
+
       const absolutePath = resolve(ctx.cwd, params.path);
 
       return withFileMutationQueue(absolutePath, async () => {
@@ -209,17 +237,39 @@ export default function (pi: ExtensionAPI) {
 
         switch (params.operation) {
           case "replace": {
+            if (params.block_index === undefined) throw new Error("block_index is required for replace");
             if (!params.content) throw new Error("content is required for replace operation");
             result = replaceBlock(source, params.section, params.block_index, params.content);
             break;
           }
           case "insert_after": {
+            if (params.block_index === undefined) throw new Error("block_index is required for insert_after");
             if (!params.content) throw new Error("content is required for insert_after operation");
             result = insertBlockAfter(source, params.section, params.block_index, params.content);
             break;
           }
           case "delete": {
+            if (params.block_index === undefined) throw new Error("block_index is required for delete");
             result = deleteBlock(source, params.section, params.block_index);
+            break;
+          }
+          case "append": {
+            if (!params.content) throw new Error("content is required for append operation");
+            result = appendToSection(source, params.section, params.content);
+            break;
+          }
+          case "rename_section": {
+            if (!params.content) throw new Error("content (new heading text) is required for rename_section");
+            result = renameSection(source, params.section, params.content);
+            break;
+          }
+          case "delete_section": {
+            result = deleteSection(source, params.section);
+            break;
+          }
+          case "add_section": {
+            if (!params.content) throw new Error("content (full section markdown including heading) is required for add_section");
+            result = addSection(source, params.section, params.content);
             break;
           }
           default: {
@@ -234,7 +284,9 @@ export default function (pi: ExtensionAPI) {
           content: [
             {
               type: "text" as const,
-              text: `${params.operation} block ${params.block_index} in "${params.section}" in ${params.path}`,
+              text: `${params.operation}${
+                params.block_index !== undefined ? ` block ${params.block_index}` : ""
+              } in "${params.section}" in ${params.path}`,
             },
           ],
           details: {
@@ -259,17 +311,26 @@ export default function (pi: ExtensionAPI) {
 
 ## Markdown File Editing
 
-When editing .md, .mdx, or .markdown files:
+When editing .md or .markdown files:
 
 - For **prose paragraphs and lists**: prefer \`md_edit\` over \`edit\`.
   It anchors to a section heading and block index, so line-reflowing
   formatters cannot break it. Call \`md_inspect\` first to find the
   correct section and block_index.
 
+- To **add content at the end of a section**: use \`md_edit\` with
+  \`operation="append"\` — no block_index needed.
+
+- To **rename, delete, or add an entire section**: use \`md_edit\` with
+  \`rename_section\`, \`delete_section\`, or \`add_section\` — no block_index needed.
+
 - For **code blocks** (fenced \`\`\`): use the regular \`edit\` tool normally.
   Code blocks are never reflowed and exact matching works reliably.
 
-- The built-in \`edit\` tool on markdown is still normalized automatically
+- For **.mdx files**: always use the regular \`edit\` tool. \`md_edit\` and
+  \`md_inspect\` do not support MDX JSX syntax.
+
+- The built-in \`edit\` tool on .md files is still normalized automatically
   to handle soft line-wrap differences, but \`md_edit\` is more robust
   for large prose rewrites.`,
     };

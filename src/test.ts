@@ -5,7 +5,7 @@
  */
 
 import { normalizeMarkdown, findInMarkdown, normalizeProse, splitSegments } from "./normalize.js";
-import { parseSections, findSection, describeSections, replaceBlock, insertBlockAfter, deleteBlock } from "./ast.js";
+import { parseSections, findSection, describeSections, replaceBlock, insertBlockAfter, deleteBlock, appendToSection, renameSection, deleteSection, addSection } from "./ast.js";
 
 let passed = 0;
 let failed = 0;
@@ -204,6 +204,122 @@ Keep this too.
   assert("deleted content gone", !deleted.includes("Delete this."));
   assert("first block preserved", deleted.includes("Keep this."));
   assert("third block preserved", deleted.includes("Keep this too."));
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n── appendToSection ──");
+{
+  const doc = `# Doc
+
+## Section
+
+Existing paragraph.
+
+## Next
+
+Other content.
+`;
+
+  const result = appendToSection(doc, "Section", "Appended paragraph.");
+  assert("appended content present", result.includes("Appended paragraph."));
+  assert("original preserved", result.includes("Existing paragraph."));
+  assert("next section preserved", result.includes("## Next"));
+  assert(
+    "appended before next section",
+    result.indexOf("Appended paragraph.") < result.indexOf("## Next"),
+  );
+  assert(
+    "appended after existing",
+    result.indexOf("Appended paragraph.") > result.indexOf("Existing paragraph."),
+  );
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n── renameSection ──");
+{
+  const doc = `# Doc
+
+## Old Name
+
+Content here.
+
+## Other
+
+More.
+`;
+
+  const result = renameSection(doc, "Old Name", "New Name");
+  assert("new heading present", result.includes("## New Name"));
+  assert("old heading gone", !result.includes("## Old Name"));
+  assert("content preserved", result.includes("Content here."));
+  assert("other section preserved", result.includes("## Other"));
+
+  // With # prefix in new name — should strip it
+  const result2 = renameSection(doc, "Old Name", "## New Name");
+  assert("strips # prefix from new name", result2.includes("## New Name") && !result2.includes("## ## New Name"));
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n── deleteSection ──");
+{
+  const doc = `# Doc
+
+## Keep This
+
+Keep content.
+
+## Delete This
+
+Delete content.
+
+More to delete.
+
+## Also Keep
+
+Also keep content.
+`;
+
+  const result = deleteSection(doc, "Delete This");
+  assert("deleted heading gone", !result.includes("## Delete This"));
+  assert("deleted content gone", !result.includes("Delete content."));
+  assert("deleted multi-block gone", !result.includes("More to delete."));
+  assert("first section preserved", result.includes("## Keep This"));
+  assert("last section preserved", result.includes("## Also Keep"));
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n── addSection ──");
+{
+  const doc = `# Doc
+
+## Section A
+
+Content A.
+
+## Section B
+
+Content B.
+`;
+
+  const newSection = "## Section C\n\nContent C.";
+  const result = addSection(doc, "Section A", newSection);
+  assert("new section present", result.includes("## Section C"));
+  assert("new content present", result.includes("Content C."));
+  assert("section A preserved", result.includes("## Section A"));
+  assert("section B preserved", result.includes("## Section B"));
+  assert(
+    "new section between A and B",
+    result.indexOf("## Section C") > result.indexOf("## Section A") &&
+      result.indexOf("## Section C") < result.indexOf("## Section B"),
+  );
+
+  // Add at end
+  const result2 = addSection(doc, "(end)", "## Section Z\n\nContent Z.");
+  assert("end: new section present", result2.includes("## Section Z"));
+  assert(
+    "end: after section B",
+    result2.indexOf("## Section Z") > result2.indexOf("## Section B"),
+  );
 }
 
 // ---------------------------------------------------------------------------

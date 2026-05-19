@@ -23,6 +23,10 @@ export type Section = {
   headingText: string;
   /** 0-based start line in the source */
   startLine: number;
+  /** character offset of the heading node's start in the original source (0 for preamble) */
+  headingStartOffset: number;
+  /** character offset just after the heading node in the original source (0 for preamble) */
+  headingEndOffset: number;
   blocks: SectionBlock[];
 };
 
@@ -47,6 +51,8 @@ export function parseSections(source: string): Section[] {
     headingDepth: 0,
     headingText: "(preamble)",
     startLine: 0,
+    headingStartOffset: 0,
+    headingEndOffset: 0,
     blocks: [],
   };
 
@@ -60,6 +66,8 @@ export function parseSections(source: string): Section[] {
         headingDepth: node.depth,
         headingText: mdastToString(node),
         startLine: node.position?.start.line ?? 0,
+        headingStartOffset: node.position?.start.offset ?? 0,
+        headingEndOffset: node.position?.end.offset ?? 0,
         blocks: [],
       };
     } else {
@@ -208,6 +216,133 @@ export function deleteBlock(
   if (source[end] === "\n") end += 1;
 
   return source.slice(0, start) + source.slice(end);
+}
+
+/**
+ * Append a new block at the end of a section.
+ */
+export function appendToSection(
+  source: string,
+  sectionHeading: string,
+  newContent: string,
+): string {
+  const sections = parseSections(source);
+  const sectionIdx = sections.findIndex(
+    (s) => normalizeHeading(s.headingText) === normalizeHeading(sectionHeading),
+  );
+  if (sectionIdx === -1) {
+    const available = sections.map((s) => `"${s.headingText}"`).join(", ");
+    throw new Error(`Section "${sectionHeading}" not found. Available sections: ${available}`);
+  }
+
+  const section = sections[sectionIdx];
+  let insertAt: number;
+  if (section.blocks.length > 0) {
+    insertAt = section.blocks[section.blocks.length - 1].endOffset;
+  } else {
+    // Empty section — insert after the heading line
+    insertAt = section.headingEndOffset;
+  }
+
+  return source.slice(0, insertAt) + "\n\n" + newContent.trimEnd() + source.slice(insertAt);
+}
+
+/**
+ * Rename a section heading (preserves heading depth).
+ */
+export function renameSection(
+  source: string,
+  sectionHeading: string,
+  newHeadingText: string,
+): string {
+  const sections = parseSections(source);
+  const section = findSection(sections, sectionHeading);
+  if (!section) {
+    const available = sections.map((s) => `"${s.headingText}"`).join(", ");
+    throw new Error(`Section "${sectionHeading}" not found. Available sections: ${available}`);
+  }
+  if (section.headingDepth === 0) {
+    throw new Error(`Cannot rename the preamble section.`);
+  }
+  const prefix = "#".repeat(section.headingDepth) + " ";
+  return (
+    source.slice(0, section.headingStartOffset) +
+    prefix +
+    newHeadingText.replace(/^#+\s*/, "").trim() +
+    source.slice(section.headingEndOffset)
+  );
+}
+
+/**
+ * Delete an entire section (heading + all its blocks).
+ * Removes up to the start of the next sibling section or end of file.
+ */
+export function deleteSection(source: string, sectionHeading: string): string {
+  const sections = parseSections(source);
+  const sectionIdx = sections.findIndex(
+    (s) => normalizeHeading(s.headingText) === normalizeHeading(sectionHeading),
+  );
+  if (sectionIdx === -1) {
+    const available = sections.map((s) => `"${s.headingText}"`).join(", ");
+    throw new Error(`Section "${sectionHeading}" not found. Available sections: ${available}`);
+  }
+
+  const section = sections[sectionIdx];
+  if (section.headingDepth === 0) {
+    throw new Error(`Cannot delete the preamble section. Use deleteBlock to remove individual blocks.`);
+  }
+
+  const nextSection = sections[sectionIdx + 1];
+  const sectionEnd = nextSection ? nextSection.headingStartOffset : source.length;
+
+  // Eat the blank line(s) immediately before this heading
+  let start = section.headingStartOffset;
+  while (start > 0 && source[start - 1] === "\n") start--;
+  // Keep one newline to avoid merging surrounding content
+  if (start < section.headingStartOffset) start += 1;
+
+  return source.slice(0, start) + source.slice(sectionEnd);
+}
+
+/**
+ * Add a new section after the given section (or at the end of the file if
+ * afterSection is "(end)"). newSectionContent should be full markdown including
+ * the heading line, e.g. "## New Section\n\nParagraph text here."
+ */
+export function addSection(
+  source: string,
+  afterSection: string,
+  newSectionContent: string,
+): string {
+  if (afterSection === "(end)") {
+    return source.trimEnd() + "\n\n" + newSectionContent.trimEnd() + "\n";
+  }
+
+  const sections = parseSections(source);
+  const sectionIdx = sections.findIndex(
+    (s) => normalizeHeading(s.headingText) === normalizeHeading(afterSection),
+  );
+  if (sectionIdx === -1) {
+    const available = sections.map((s) => `"${s.headingText}"`).join(", ");
+    throw new Error(`Section "${afterSection}" not found. Available sections: ${available}`);
+  }
+
+  const nextSection = sections[sectionIdx + 1];
+  // Insert just before the next section's heading (which already has \n\n before it)
+  // or at end of file
+  const insertAt = nextSection ? nextSection.headingStartOffset : source.length;
+
+  if (nextSection) {
+    // There's already \n\n before the next heading; insert our block right before it
+    return (
+      source.slice(0, insertAt) +
+      newSectionContent.trimEnd() +
+      "\n\n" +
+      source.slice(insertAt)
+    );
+  } else {
+    return source.trimEnd() + "\n\n" + newSectionContent.trimEnd() + "\n";
+  }
 }
 
 /**
