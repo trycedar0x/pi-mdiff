@@ -1,6 +1,6 @@
 {
   "name": "pi-mdiff",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Markdown-aware edit tools for pi coding agent — normalized SEARCH matching and block-level anchored editing for .md files",
   "license": "MIT",
   "type": "module",
