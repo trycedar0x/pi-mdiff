@@ -1,9 +1,26 @@
 {
   "name": "pi-mdiff",
   "version": "0.1.0",
-  "description": "Markdown-aware edit tools for pi coding agent — block-level anchoring, normalized SEARCH matching, and section-based edits for prose files",
+  "description": "Markdown-aware edit tools for pi coding agent — normalized SEARCH matching and block-level anchored editing for .md files",
   "license": "MIT",
   "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-coding-agent",
+    "markdown",
+    "diff",
+    "edit"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/trycedar0x/pi-mdiff"
+  },
+  "files": [
+    "src/index.ts",
+    "src/normalize.ts",
+    "src/ast.ts",
+    "README.md"
+  ],
   "pi": {
     "extensions": [
       "./src/index.ts"

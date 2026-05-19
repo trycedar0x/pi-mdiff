@@ -52,10 +52,10 @@ Tells the LLM to prefer `md_edit` for prose paragraphs and `edit` for code block
 
 ```bash
 # Project-local (recommended — auto-installs for all agents on the project)
-pi install -l git:github.com/jacobwang/pi-mdiff
+pi install -l git:github.com/trycedar0x/pi-mdiff
 
 # Global
-pi install git:github.com/jacobwang/pi-mdiff
+pi install git:github.com/trycedar0x/pi-mdiff
 
 # Test without installing
 pi -e ./src/index.ts
