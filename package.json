@@ -5,18 +5,33 @@
   "license": "MIT",
   "type": "module",
   "pi": {
-    "extensions": ["./src/index.ts"]
+    "extensions": [
+      "./src/index.ts"
+    ]
   },
   "dependencies": {
+    "mdast-util-from-markdown": "^2.0.2",
+    "mdast-util-to-string": "^4.0.0",
     "remark": "^15.0.1",
     "remark-parse": "^11.0.0",
     "remark-stringify": "^11.0.0",
-    "unified": "^11.0.5",
-    "mdast-util-to-string": "^4.0.0",
-    "mdast-util-from-markdown": "^2.0.2"
+    "unified": "^11.0.5"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
   },
   "devDependencies": {
-    "typescript": "^5.4.5",
-    "@types/node": "^20.0.0"
+    "@earendil-works/pi-ai": "file:../../../.local/share/fnm/node-versions/v24.14.0/installation/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai",
+    "@earendil-works/pi-coding-agent": "file:../../../.local/share/fnm/node-versions/v24.14.0/installation/lib/node_modules/@earendil-works/pi-coding-agent",
+    "@types/node": "^20.0.0",
+    "tsx": "^4.22.3",
+    "typebox": "file:../../../.local/share/fnm/node-versions/v24.14.0/installation/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/typebox",
+    "typescript": "^5.4.5"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx src/test.ts"
   }
 }

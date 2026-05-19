@@ -122,8 +122,8 @@ Deploy paragraph.
   const arch = findSection(sections, "Architecture");
   assert("Architecture section found", arch !== null);
   assertEqual("Architecture has 2 blocks", arch?.blocks.length, 2);
-  assert("first block text", arch?.blocks[0].text.includes("First paragraph"));
-  assert("second block text", arch?.blocks[1].text.includes("Second paragraph"));
+  assert("first block text", arch?.blocks[0].text.includes("First paragraph") ?? false);
+  assert("second block text", arch?.blocks[1].text.includes("Second paragraph") ?? false);
 
   // Case-insensitive heading lookup
   const archLower = findSection(sections, "architecture");

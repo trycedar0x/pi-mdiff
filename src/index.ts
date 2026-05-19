@@ -74,7 +74,7 @@ export default function (pi: ExtensionAPI) {
   // Hook 2: Intercept failed `edit` results on markdown files
   // Try a manual fuzzy apply before surfacing the error to the LLM.
   // -------------------------------------------------------------------------
-  pi.on("tool_result", async (event, _ctx) => {
+  pi.on("tool_result", async (event, ctx) => {
     if (event.toolName !== "edit" || !event.isError) return;
 
     const pending = pendingMarkdownEdits.get(event.toolCallId);
@@ -83,7 +83,7 @@ export default function (pi: ExtensionAPI) {
     // Clean up
     pendingMarkdownEdits.delete(event.toolCallId);
 
-    const absolutePath = resolve(_ctx.cwd, pending.path);
+    const absolutePath = resolve(ctx.cwd, pending.path);
     let source: string;
     try {
       source = await readFile(absolutePath, "utf-8");
@@ -221,6 +221,10 @@ export default function (pi: ExtensionAPI) {
           case "delete": {
             result = deleteBlock(source, params.section, params.block_index);
             break;
+          }
+          default: {
+            const _exhaustive: never = params.operation;
+            throw new Error(`Unknown operation: ${_exhaustive}`);
           }
         }
 
