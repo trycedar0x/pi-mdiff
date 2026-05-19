@@ -19,7 +19,8 @@
     "src/index.ts",
     "src/normalize.ts",
     "src/ast.ts",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "pi": {
     "extensions": [
