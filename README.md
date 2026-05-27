@@ -4,11 +4,13 @@
 
 [![npm version](https://img.shields.io/npm/v/@trycedar/pi-mdiff?style=flat-square)](https://www.npmjs.com/package/@trycedar/pi-mdiff)
 [![license](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](https://opensource.org/licenses/MIT)
-[![pi-package](https://img.shields.io/badge/pi-package-8b5cf6?style=flat-square)](https://pi.dev/packages/pi-mdiff)
+[![pi-package](https://img.shields.io/badge/pi-package-8b5cf6?style=flat-square)](https://pi.dev/packages/@trycedar/pi-mdiff)
+
+![pi-mdiff demo](assets/demo/pi-mdiff-demo.gif)
 
 ## The problem
 
-Every line-based tool — git diff, AI SEARCH blocks, blame — assumes lines are meaningful units. In code they are. In markdown they aren't.
+Pi's normal edit tool uses exact text matching. That is brittle for Markdown because prose is semantically paragraph-based, but physically line-wrapped by whatever formatter, editor, or human last touched the file.
 
 A paragraph like this:
 
@@ -24,7 +26,7 @@ All queries go through the repository layer.
 The system uses PostgreSQL for all storage. The schema is defined in schema.sql. All queries go through the repository layer.
 ```
 
-A formatter rewraps it. Now your diff shows three deleted lines and one added line — but nothing changed. And when pi tries to edit the file, SEARCH fails because it's matching at the wrong granularity.
+A formatter rewraps it. The content is equivalent, but an exact SEARCH block no longer matches the physical lines in the file. The agent sees a tool error even though it identified the right paragraph.
 
 ```
 Error: cannot find matching context in docs/architecture.md
@@ -34,7 +36,7 @@ The schema is defined in schema.sql.
 All queries go through the repository layer.
 ```
 
-**pi-mdiff fixes this by operating at paragraph and block level instead of line level.**
+pi-mdiff fixes the agent workflow around Markdown: normal `edit` calls get soft-wrap-aware matching, and larger prose changes can use section/block anchors instead of fragile exact text.
 
 ## Install
 
@@ -76,7 +78,7 @@ Every `edit` call on a markdown file is intercepted. SEARCH blocks are normalize
 
 **After pi-mdiff:** normalization runs silently → match found → edit applied → done.
 
-If normalization still can't match, fuzzy recovery kicks in and returns success. The LLM never sees the error.
+If the built-in edit still cannot match, pi-mdiff attempts normalized soft-wrap recovery and returns success only when it can apply the intended edit.
 
 ### `md_inspect` — see section structure before editing
 
@@ -85,16 +87,16 @@ md_inspect path="docs/architecture.md"
 ```
 
 ```
-## Overview
-  [0] paragraph: "This project is a web application that helps…"
-## Database Layer
-  [0] paragraph: "We use PostgreSQL for all persistent storage…"
-  [1] paragraph: "Migrations are managed via Alembic…"
-## API Layer
-  [0] paragraph: "The REST API is built with Express…"
+## Overview  (path: Overview, lines 1-6)
+  [0] paragraph lines 3-4: "This project is a web application that helps…"
+## Database Layer  (path: Database Layer, lines 7-13)
+  [0] paragraph lines 9-10: "We use PostgreSQL for all persistent storage…"
+  [1] paragraph lines 12-13: "Migrations are managed via Alembic…"
+## API Layer  (path: API Layer, lines 14-18)
+  [0] paragraph lines 16-18: "The REST API is built with Express…"
 ```
 
-Shows every section heading and the blocks inside it, with 0-based indices. Call this before `md_edit` so you know exactly what to target.
+Shows every section heading, heading path, line range, and block inside it, with 0-based block indices. Call this before `md_edit` so you know exactly what to target. Heading paths disambiguate repeated section names such as `API > Usage` and `CLI > Usage`.
 
 ### `md_edit` — section-anchored editing
 
@@ -118,6 +120,24 @@ Anchors to a heading + block index. No text matching at all. Formatters can refl
 | `rename_section` | Rename the section heading itself |
 | `delete_section` | Remove the entire section including its heading |
 | `add_section` | Insert a brand-new section after another; `content` includes the heading line |
+
+### `md_diff` — review Markdown structurally
+
+```
+md_diff before_path="/tmp/architecture.before.md"
+        after_path="docs/architecture.md"
+```
+
+Reports changes by heading path and block index instead of raw physical lines:
+
+```
+~ section Database Layer
+  ~ [0] paragraph lines 9-10 → 9-11
+    - "We use SQLite for local storage…"
+    + "We use PostgreSQL for persistent storage…"
+```
+
+Use this when a normal line diff is noisy because prose was reflowed. It helps the agent verify what changed at the Markdown block level.
 
 ## Common workflows
 
@@ -155,7 +175,7 @@ Only prose lines are joined. Everything structurally meaningful is left exactly 
 |---|---|
 | `path` | Path to the markdown file (`.md` or `.markdown`) |
 
-Returns a formatted section map with block type and preview text. Use before `md_edit` to find the right `section` and `block_index`.
+Returns a formatted section map with heading paths, section line ranges, block line ranges, block type, and preview text. Use before `md_edit` to find the right `section` and `block_index`.
 
 ### `md_edit`
 
@@ -167,7 +187,16 @@ Returns a formatted section map with block type and preview text. Use before `md
 | `block_index` | 0-based index of the target block (not needed for `append`, `rename_section`, `delete_section`, `add_section`) |
 | `content` | New content — required for `replace`, `insert_after`, `append`, `add_section`; new heading text for `rename_section` |
 
-> **Note:** `md_edit` and `md_inspect` support `.md` and `.markdown` files only. For `.mdx` files, use the built-in `edit` tool (normalization still applies automatically).
+### `md_diff`
+
+| Parameter | Description |
+|---|---|
+| `before_path` | Path to the before/original markdown file (`.md` or `.markdown`) |
+| `after_path` | Path to the after/modified markdown file (`.md` or `.markdown`) |
+
+Returns a Markdown-aware structural diff grouped by heading path and block index. Use it when a normal line diff is dominated by prose reflow.
+
+> **Note:** `md_edit`, `md_inspect`, and `md_diff` support `.md` and `.markdown` files only. For `.mdx` files, use the built-in `edit` tool (normalization still applies automatically).
 
 ## How it works
 
@@ -178,7 +207,7 @@ LLM calls edit() on .md file
   → pi-mdiff intercepts tool_call
   → normalizes SEARCH block to paragraph granularity
   → built-in edit runs with normalized text
-  → if still fails: fuzzy findInMarkdown(), writes file, returns success
+  → if still fails: normalized findInMarkdown(), writes file, returns success
 ```
 
 **Block-anchor path** (`md_edit`, most robust):
@@ -190,6 +219,15 @@ LLM calls md_edit()
   → locate nth block node
   → splice at exact character offsets
   → write file
+```
+
+**Structural review path** (`md_diff`):
+
+```
+LLM calls md_diff(before, after)
+  → parse both files into section/block maps
+  → compare heading paths and block indices
+  → report section/block changes with line ranges
 ```
 
 ## Eval coverage
@@ -206,12 +244,22 @@ npm run eval   # 79 cases, 100% pass rate
 | reflow | 9 | 3×3 format matrix — all 6 off-diagonal mismatches recover correctly |
 | edge | 10 | Empty files, preamble, duplicate headings, long paragraphs, inline code |
 
+## Next steps
+
+pi-mdiff currently focuses on reliable prose edits and structural review for Markdown. Broader agent/documentation workflows could still benefit from:
+
+- Formatter-aware writing: detect the file's wrapping style and reflow inserted prose to match it.
+- Structural table and list operations: update a table cell, insert a list item, or move list items without exact text matching.
+- MDX-aware block editing: parse MDX safely and treat JSX nodes as protected structural blocks.
+- Intent-level search: add `md_find`/`md_query` for prompts like "find sections that mention auth tokens".
+- Markdown validation: check links, duplicate anchors, malformed tables, and frontmatter after edits.
+
 ## Development
 
 ```bash
 git clone https://github.com/trycedar0x/pi-mdiff
 cd pi-mdiff && npm install
-npm test          # 58 unit tests
+npm test          # 67 unit tests
 npm run eval      # 79 scenario evals
 npm run typecheck # strict TypeScript check
 pi -e ./src/index.ts  # load in pi for manual testing

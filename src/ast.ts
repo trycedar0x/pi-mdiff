@@ -21,8 +21,12 @@ export type BlockLocation = {
 export type Section = {
   headingDepth: number;
   headingText: string;
-  /** 0-based start line in the source */
+  /** Heading ancestry, e.g. ["API", "Authentication"] */
+  path: string[];
+  /** 1-based start line in the source */
   startLine: number;
+  /** 1-based end line in the source */
+  endLine: number;
   /** character offset of the heading node's start in the original source (0 for preamble) */
   headingStartOffset: number;
   /** character offset just after the heading node in the original source (0 for preamble) */
@@ -34,6 +38,10 @@ export type SectionBlock = {
   index: number;
   type: string;
   text: string;
+  raw: string;
+  /** 1-based line range in original source */
+  startLine: number;
+  endLine: number;
   /** character offset in original source */
   startOffset: number;
   endOffset: number;
@@ -45,12 +53,16 @@ export type SectionBlock = {
 export function parseSections(source: string): Section[] {
   const tree = fromMarkdown(source);
   const sections: Section[] = [];
+  const totalLines = source === "" ? 1 : source.split("\n").length;
+  const headingStack: Array<{ depth: number; text: string }> = [];
 
   // Add a virtual "top-level" section for content before the first heading
   let currentSection: Section = {
     headingDepth: 0,
     headingText: "(preamble)",
-    startLine: 0,
+    path: ["(preamble)"],
+    startLine: 1,
+    endLine: totalLines,
     headingStartOffset: 0,
     headingEndOffset: 0,
     blocks: [],
@@ -62,10 +74,19 @@ export function parseSections(source: string): Section[] {
       if (currentSection.blocks.length > 0 || sections.length > 0) {
         sections.push(currentSection);
       }
+
+      const headingText = mdastToString(node);
+      while (headingStack.length > 0 && headingStack[headingStack.length - 1].depth >= node.depth) {
+        headingStack.pop();
+      }
+      headingStack.push({ depth: node.depth, text: headingText });
+
       currentSection = {
         headingDepth: node.depth,
-        headingText: mdastToString(node),
-        startLine: node.position?.start.line ?? 0,
+        headingText,
+        path: headingStack.map((h) => h.text),
+        startLine: node.position?.start.line ?? 1,
+        endLine: totalLines,
         headingStartOffset: node.position?.start.offset ?? 0,
         headingEndOffset: node.position?.end.offset ?? 0,
         blocks: [],
@@ -77,6 +98,9 @@ export function parseSections(source: string): Section[] {
         index: currentSection.blocks.length,
         type: node.type,
         text: mdastToString(node),
+        raw: source.slice(startOffset, endOffset),
+        startLine: node.position?.start.line ?? 1,
+        endLine: node.position?.end.line ?? 1,
         startOffset,
         endOffset,
       });
@@ -84,6 +108,12 @@ export function parseSections(source: string): Section[] {
   }
 
   sections.push(currentSection);
+
+  for (let i = 0; i < sections.length; i++) {
+    const next = sections[i + 1];
+    sections[i].endLine = next ? Math.max(sections[i].startLine, next.startLine - 1) : totalLines;
+  }
+
   return sections;
 }
 
@@ -94,10 +124,28 @@ function normalizeHeading(h: string): string {
   return h.replace(/^#+\s*/, "").trim().toLowerCase();
 }
 
+function normalizePath(path: string): string[] {
+  return path
+    .split(">")
+    .map((part) => normalizeHeading(part))
+    .filter(Boolean);
+}
+
 /**
- * Find a section by heading text (case-insensitive, ignores leading #s).
+ * Find a section by heading text, or by a heading path like "API > Usage".
+ * Matching is case-insensitive and ignores leading #s.
  */
 export function findSection(sections: Section[], heading: string): Section | null {
+  const normalizedPath = normalizePath(heading);
+  if (normalizedPath.length > 1) {
+    return (
+      sections.find((s) => {
+        const sectionPath = s.path.map(normalizeHeading);
+        return sectionPath.length === normalizedPath.length && sectionPath.every((part, i) => part === normalizedPath[i]);
+      }) ?? null
+    );
+  }
+
   const normalized = normalizeHeading(heading);
   return sections.find((s) => normalizeHeading(s.headingText) === normalized) ?? null;
 }
@@ -356,13 +404,67 @@ export function describeSections(source: string): string {
   for (const section of sections) {
     if (section.headingText === "(preamble)" && section.blocks.length === 0) continue;
     const prefix = section.headingDepth > 0 ? "#".repeat(section.headingDepth) + " " : "";
-    lines.push(`${prefix}${section.headingText}`);
+    const path = section.path.join(" > ");
+    lines.push(`${prefix}${section.headingText}  (path: ${path}, lines ${section.startLine}-${section.endLine})`);
     for (const block of section.blocks) {
       const preview = block.text.slice(0, 60).replace(/\n/g, " ");
       const ellipsis = block.text.length > 60 ? "…" : "";
-      lines.push(`  [${block.index}] ${block.type}: "${preview}${ellipsis}"`);
+      lines.push(`  [${block.index}] ${block.type} lines ${block.startLine}-${block.endLine}: "${preview}${ellipsis}"`);
     }
   }
 
   return lines.join("\n");
+}
+
+export function diffMarkdownByBlocks(before: string, after: string): string {
+  const beforeSections = parseSections(before);
+  const afterSections = parseSections(after);
+  const beforeByPath = new Map(beforeSections.map((section) => [section.path.join(" > "), section]));
+  const afterByPath = new Map(afterSections.map((section) => [section.path.join(" > "), section]));
+  const sectionPaths = Array.from(new Set([...beforeByPath.keys(), ...afterByPath.keys()]));
+  const lines: string[] = [];
+
+  for (const path of sectionPaths) {
+    const oldSection = beforeByPath.get(path);
+    const newSection = afterByPath.get(path);
+
+    if (!oldSection && newSection) {
+      lines.push(`+ section ${path} (lines ${newSection.startLine}-${newSection.endLine}, ${newSection.blocks.length} block(s))`);
+      continue;
+    }
+    if (oldSection && !newSection) {
+      lines.push(`- section ${path} (was lines ${oldSection.startLine}-${oldSection.endLine}, ${oldSection.blocks.length} block(s))`);
+      continue;
+    }
+    if (!oldSection || !newSection) continue;
+
+    const maxBlocks = Math.max(oldSection.blocks.length, newSection.blocks.length);
+    const sectionChanges: string[] = [];
+    for (let i = 0; i < maxBlocks; i++) {
+      const oldBlock = oldSection.blocks[i];
+      const newBlock = newSection.blocks[i];
+      if (!oldBlock && newBlock) {
+        sectionChanges.push(`  + [${i}] ${newBlock.type} lines ${newBlock.startLine}-${newBlock.endLine}: "${previewBlock(newBlock.text)}"`);
+      } else if (oldBlock && !newBlock) {
+        sectionChanges.push(`  - [${i}] ${oldBlock.type} was lines ${oldBlock.startLine}-${oldBlock.endLine}: "${previewBlock(oldBlock.text)}"`);
+      } else if (oldBlock && newBlock && oldBlock.raw !== newBlock.raw) {
+        const kind = oldBlock.type === newBlock.type ? oldBlock.type : `${oldBlock.type} → ${newBlock.type}`;
+        sectionChanges.push(`  ~ [${i}] ${kind} lines ${oldBlock.startLine}-${oldBlock.endLine} → ${newBlock.startLine}-${newBlock.endLine}`);
+        sectionChanges.push(`    - "${previewBlock(oldBlock.text)}"`);
+        sectionChanges.push(`    + "${previewBlock(newBlock.text)}"`);
+      }
+    }
+
+    if (sectionChanges.length > 0) {
+      lines.push(`~ section ${path}`);
+      lines.push(...sectionChanges);
+    }
+  }
+
+  return lines.length > 0 ? lines.join("\n") : "No markdown block changes detected.";
+}
+
+function previewBlock(text: string): string {
+  const preview = text.replace(/\s+/g, " ").trim().slice(0, 80);
+  return preview + (text.replace(/\s+/g, " ").trim().length > 80 ? "…" : "");
 }

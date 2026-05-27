@@ -30,7 +30,7 @@ import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 
 import { normalizeMarkdown, findInMarkdown } from "./normalize.js";
-import { replaceBlock, insertBlockAfter, deleteBlock, describeSections, appendToSection, renameSection, deleteSection, addSection } from "./ast.js";
+import { replaceBlock, insertBlockAfter, deleteBlock, describeSections, appendToSection, renameSection, deleteSection, addSection, diffMarkdownByBlocks } from "./ast.js";
 
 function isMarkdownPath(path: string | undefined): boolean {
   if (!path) return false;
@@ -72,7 +72,7 @@ export default function (pi: ExtensionAPI) {
 
   // -------------------------------------------------------------------------
   // Hook 2: Intercept failed `edit` results on markdown files
-  // Try a manual fuzzy apply before surfacing the error to the LLM.
+  // Try a manual normalized soft-wrap apply before surfacing the error to the LLM.
   // -------------------------------------------------------------------------
   pi.on("tool_result", async (event, ctx) => {
     if (event.toolName !== "edit" || !event.isError) return;
@@ -141,8 +141,8 @@ export default function (pi: ExtensionAPI) {
     label: "Markdown Inspect",
     description:
       "Show the section and block structure of a markdown file (.md only — not .mdx). " +
-      "Returns each heading and the blocks (paragraphs, lists, code, etc.) inside it, " +
-      "with their 0-based indices. Use this before md_edit to find the right section and block_index.",
+      "Returns each heading, heading path, line range, and the blocks (paragraphs, lists, code, etc.) inside it, " +
+      "with their 0-based indices and line ranges. Use this before md_edit to find the right section and block_index.",
     promptSnippet: "Inspect markdown file structure (sections + block indices for md_edit)",
     promptGuidelines: [
       "Use md_inspect on .md files before md_edit to discover the correct section heading and block_index.",
@@ -162,6 +162,43 @@ export default function (pi: ExtensionAPI) {
       const description = describeSections(source);
       return {
         content: [{ type: "text" as const, text: description }],
+        details: {},
+      };
+    },
+  });
+
+  // -------------------------------------------------------------------------
+  // Tool: md_diff
+  // Markdown-aware structural diff for review.
+  // -------------------------------------------------------------------------
+  pi.registerTool({
+    name: "md_diff",
+    label: "Markdown Diff",
+    description:
+      "Compare two markdown files by section and block instead of raw lines. " +
+      "Reports added/deleted sections and changed/added/deleted blocks with heading paths and line ranges. " +
+      "Use this to review markdown edits without noisy soft-wrap-only line diffs.",
+    promptSnippet: "Compare markdown files structurally by section/block",
+    promptGuidelines: [
+      "Use md_diff to review markdown changes when a line diff is noisy or reflow-heavy.",
+      "Pass before_path and after_path for two markdown files. For current git changes, create/read an appropriate before copy first.",
+    ],
+    parameters: Type.Object({
+      before_path: Type.String({ description: "Path to the before/original markdown file" }),
+      after_path: Type.String({ description: "Path to the after/modified markdown file" }),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      if (params.before_path.endsWith(".mdx") || params.after_path.endsWith(".mdx")) {
+        return {
+          content: [{ type: "text" as const, text: "md_diff does not support .mdx files yet. Use regular git diff/read for MDX." }],
+          details: {},
+        };
+      }
+
+      const before = await readFile(resolve(ctx.cwd, params.before_path), "utf-8");
+      const after = await readFile(resolve(ctx.cwd, params.after_path), "utf-8");
+      return {
+        content: [{ type: "text" as const, text: diffMarkdownByBlocks(before, after) }],
         details: {},
       };
     },
