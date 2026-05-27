@@ -79,7 +79,7 @@ function isStructuralLine(l: string): boolean {
 }
 
 /**
- * Normalize a prose segment for fuzzy matching:
+ * Normalize a prose segment for soft-wrap-aware matching:
  * - Join ALL soft-wrapped lines within a paragraph into a single line.
  *   A "soft wrap" is a \n that is not followed by a structural element.
  * - Collapse 3+ blank lines → 2

@@ -5,7 +5,7 @@
  */
 
 import { normalizeMarkdown, findInMarkdown, normalizeProse, splitSegments } from "./normalize.js";
-import { parseSections, findSection, describeSections, replaceBlock, insertBlockAfter, deleteBlock, appendToSection, renameSection, deleteSection, addSection } from "./ast.js";
+import { parseSections, findSection, describeSections, replaceBlock, insertBlockAfter, deleteBlock, appendToSection, renameSection, deleteSection, addSection, diffMarkdownByBlocks } from "./ast.js";
 
 let passed = 0;
 let failed = 0;
@@ -124,6 +124,9 @@ Deploy paragraph.
   assertEqual("Architecture has 2 blocks", arch?.blocks.length, 2);
   assert("first block text", arch?.blocks[0].text.includes("First paragraph") ?? false);
   assert("second block text", arch?.blocks[1].text.includes("Second paragraph") ?? false);
+  assertEqual("Architecture path", arch?.path, ["Title", "Architecture"]);
+  assert("Architecture line range", (arch?.startLine ?? 0) > 0 && (arch?.endLine ?? 0) >= (arch?.startLine ?? 0));
+  assert("block line range", (arch?.blocks[0].startLine ?? 0) > 0 && (arch?.blocks[0].endLine ?? 0) >= (arch?.blocks[0].startLine ?? 0));
 
   // Case-insensitive heading lookup
   const archLower = findSection(sections, "architecture");
@@ -132,6 +135,9 @@ Deploy paragraph.
   // Lookup with # prefix
   const archHash = findSection(sections, "## Architecture");
   assert("lookup with ## prefix", archHash !== null);
+
+  const subByPath = findSection(sections, "Title > Architecture > Sub-section");
+  assert("lookup with heading path", subByPath !== null);
 }
 
 // ---------------------------------------------------------------------------
@@ -141,6 +147,8 @@ console.log("\n── describeSections ──");
   const desc = describeSections(doc);
   assert("contains heading", desc.includes("# Title") || desc.includes("Title"));
   assert("contains block index", desc.includes("[0]"));
+  assert("contains heading path", desc.includes("path:"));
+  assert("contains line ranges", desc.includes("lines"));
 }
 
 // ---------------------------------------------------------------------------
@@ -320,6 +328,31 @@ Content B.
     "end: after section B",
     result2.indexOf("## Section Z") > result2.indexOf("## Section B"),
   );
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n── diffMarkdownByBlocks ──");
+{
+  const before = `# Doc
+
+## Database
+
+We use SQLite for storage.
+`;
+  const after = `# Doc
+
+## Database
+
+We use PostgreSQL for storage.
+
+## Deployment
+
+Deploy with Docker.
+`;
+  const diff = diffMarkdownByBlocks(before, after);
+  assert("reports changed section", diff.includes("~ section Doc > Database"));
+  assert("reports changed block", diff.includes("~ [0] paragraph"));
+  assert("reports added section", diff.includes("+ section Doc > Deployment"));
 }
 
 // ---------------------------------------------------------------------------
